@@ -23,7 +23,7 @@ Runs fully offline — no OpenAI or external APIs required.
 **1. Clone and create a virtual environment**
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Maku0505/crm-assistant.git
 cd crm-assistant
 python -m venv venv
 source venv/bin/activate
