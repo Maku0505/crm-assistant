@@ -36,6 +36,7 @@ FOLDER_TYPE_MAP = {
     "tickets":     "ticket",
     "emails":      "email",
     "documents":   "document",
+    "documets":    "document",   # typo in dataset folder name
     "files":       "file",
 }
 
@@ -100,6 +101,37 @@ def load_eml(path: Path) -> list[Document]:
     return [Document(page_content=text, metadata={})] if text else []
 
 
+def load_json(path: Path) -> list[Document]:
+    import json
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception as e:
+        print(f"  [WARN] Could not parse JSON {path.name}: {e}")
+        return []
+    docs = []
+    # Handle list of email thread objects
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                lines = []
+                for k, v in item.items():
+                    if isinstance(v, (str, int, float)):
+                        lines.append(f"{k}: {v}")
+                    elif isinstance(v, list):
+                        # e.g. messages array inside a thread
+                        for msg in v:
+                            if isinstance(msg, dict):
+                                lines.append("\n".join(f"{mk}: {mv}" for mk, mv in msg.items() if isinstance(mv, str)))
+                text = "\n".join(lines).strip()
+                if text:
+                    docs.append(Document(page_content=text, metadata={}))
+    elif isinstance(data, dict):
+        text = "\n".join(f"{k}: {v}" for k, v in data.items() if isinstance(v, str))
+        if text:
+            docs.append(Document(page_content=text, metadata={}))
+    return docs
+
+
 # Extension → loader function
 LOADER_MAP = {
     ".txt":  load_txt,
@@ -112,6 +144,7 @@ LOADER_MAP = {
     ".xls":  load_xlsx,
     ".eml":  load_eml,
     ".msg":  load_eml,
+    ".json": load_json,
 }
 
 
@@ -208,15 +241,28 @@ def main(reset: bool = False):
         print("[ERROR] No documents loaded. Check your data folder.")
         return
 
-    print(f"\n[INFO] Loaded {len(all_docs)} section(s). Chunking...")
+    print(f"\n[INFO] Loaded {len(all_docs)} document(s). Storing whole files (no chunking)...")
 
+    # Store each document as-is — no chunking.
+    # This ensures every file is always retrieved completely.
+    # For very large files (>8000 chars) we do a single split just to stay
+    # within Mistral's context window, but most files will stay in one piece.
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
         separators=["\n\n", "\n", ". ", " ", ""],
     )
-    chunks = splitter.split_documents(all_docs)
-    print(f"[INFO] {len(chunks)} chunk(s) created.")
+
+    chunks = []
+    for doc in all_docs:
+        if len(doc.page_content) <= CHUNK_SIZE:
+            chunks.append(doc)   # fits whole — no split
+        else:
+            pieces = splitter.split_documents([doc])
+            print(f"  [SPLIT] {doc.metadata.get('filename','?')} → {len(pieces)} pieces ({len(doc.page_content)} chars)")
+            chunks.extend(pieces)
+
+    print(f"[INFO] {len(chunks)} chunk(s) total ({len(all_docs)} files).")
 
     ids = [
         hashlib.md5(
